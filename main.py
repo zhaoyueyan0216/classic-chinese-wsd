@@ -186,161 +186,161 @@ def llm_generate_topk_senses(text, candidate_senses, k=2):
 
 def process_batch(batch_id, batch_senses, wsid_to_context, wsid_to_sense, test_word_to_senses, sense_embedding_cache, preloaded_corpus, config=None):
     """
-    处理一批测试用例
+    Process a batch of test cases
     
     Args:
-        batch_id (int): 批次ID
-        batch_senses (list): 批次中的义项列表
-        wsid_to_context (dict): wsid到context的映射
-        wsid_to_sense (dict): wsid到sense的映射
-        test_word_to_senses (dict): 测试词到义项的映射
-        sense_embedding_cache (dict): 义项嵌入缓存
-        preloaded_corpus (list): 预加载的语料库
-        config (dict): 配置选项
+        batch_id (int): Batch ID
+        batch_senses (list): List of senses in the batch
+        wsid_to_context (dict): Mapping from wsid to context
+        wsid_to_sense (dict): Mapping from wsid to sense
+        test_word_to_senses (dict): Mapping from test word to senses
+        sense_embedding_cache (dict): Sense embedding cache
+        preloaded_corpus (list): Preloaded corpus
+        config (dict): Configuration options
         
     Returns:
         tuple: (correct, total, test_results)
     """
-    # 使用默认配置
+    # Use default configuration
     if config is None:
         config = BASE_CONFIG
     correct = 0
     total = 0
     test_results = []
     
-    print(f"\n\n=== 开始处理批次 {batch_id+1}，共 {len(batch_senses)} 个测试用例 ===")
+    print(f"\n\n=== Starting processing batch {batch_id+1}, total {len(batch_senses)} test cases ===")
     
     for i, sense in enumerate(batch_senses):
         wsid = str(sense["wsid"])
         word = sense["word"]
         
-        # 找到对应的context
+        # Find corresponding context
         context = wsid_to_context.get(wsid)
         if not context:
-            continue  # 没有对应的context，跳过
+            continue  # No corresponding context, skip
         
         total += 1
-        print(f"\n\n--- 测试义项 {i+1}/{len(batch_senses)} (批次 {batch_id+1}) ---")
+        print(f"\n\n--- Test sense {i+1}/{len(batch_senses)} (batch {batch_id+1}) ---")
         
         text = context["txt"]
         gold_wsid = wsid
         
-        print(f"目标词：{word}")
-        print(f"上下文：{text}")
+        print(f"Target word: {word}")
+        print(f"Context: {text}")
         print(f"Gold wsid: {gold_wsid}")
         print(f"Gold sense: {sense['newgloss']}")
         
-        # 获取该词的所有候选义项（从测试词集合中获取）
+        # Get all candidate senses for this word (from test word set)
         candidate_senses = test_word_to_senses.get(word, [])
         if not candidate_senses:
-            print(f"警告：无法找到word={word}的候选义项，跳过该测试")
+            print(f"Warning: Cannot find candidate senses for word={word}, skipping this test")
             continue
         
-        print(f"候选义项数量：{len(candidate_senses)}")
+        print(f"Number of candidate senses: {len(candidate_senses)}")
         for s in candidate_senses:
             print(f"  - wsid={s['wsid']} | gloss={s['newgloss']}")
         
-        # 步骤1：LLM生成Top-2义项（三次判断取并集）
-        print("\n>>> 步骤1：LLM生成Top-2义项（三次判断取并集）")
+        # Step 1: LLM generates Top-2 senses (three judgments, take union)
+        print("\n>>> Step 1: LLM generates Top-2 senses (three judgments, take union)")
         
         if config["use_top2_filter"]:
             try:
                 top2_senses = llm_generate_topk_senses(text, candidate_senses, k=2)
-                print(f"三次判断并集结果：")
+                print(f"Three judgments union result:")
                 for s in top2_senses:
                     print(f"  - wsid={s['wsid']} | gloss={s['newgloss']}")
             except Exception as e:
-                print(f"生成Top-2义项时出错：{e}")
+                print(f"Error generating Top-2 senses: {e}")
                 continue
             
             if len(top2_senses) < 1:
-                print("警告：生成的Top-2义项数量不足，使用备选策略")
-                # 备选策略：使用前2个候选义项
+                print("Warning: Insufficient Top-2 senses generated, using alternative strategy")
+                # Alternative strategy: use first 2 candidate senses
                 if len(candidate_senses) >= 1:
                     top2_senses = candidate_senses[:2]
-                    print("使用前2个候选义项，继续测试")
+                    print("Using first 2 candidate senses, continuing test")
                     for s in top2_senses:
                         print(f"  - wsid={s['wsid']} | gloss={s['newgloss']}")
                 else:
-                    print("候选义项数量不足，跳过该测试")
+                    print("Insufficient candidate senses, skipping this test")
                     continue
         else:
-            # 不使用Top-2过滤，使用所有候选义项
+            # Not using Top-2 filtering, use all candidate senses
             top2_senses = candidate_senses
-            print(f"不使用Top-2过滤，使用全部 {len(top2_senses)} 个候选义项")
+            print(f"Not using Top-2 filtering, using all {len(top2_senses)} candidate senses")
         
-        # 步骤2：构建历史证据（使用伪古文生成 + Pyserini BM25召回 + embedding重排）
-        print("\n>>> 步骤2：构建历史证据")
+        # Step 2: Build historical evidence (using pseudo-ancient Chinese generation + Pyserini BM25 retrieval + embedding reranking)
+        print("\n>>> Step 2: Build historical evidence")
         context_emb = get_embedding(text)
         sense_evidence_list = []
         
         for sense in top2_senses:
             sense_wsid = str(sense["wsid"])
             sense_gloss = sense["newgloss"]
-            print(f"\n--- 处理义项 wsid={sense_wsid} ---")
+            print(f"\n--- Processing sense wsid={sense_wsid} ---")
             
-            # 初始化证据
+            # Initialize evidence
             prototype_vector = None
             schema_summary = ""
             supporting_sentences = []
             similarity = 0.0
             
             if config["use_supporting_sentences"]:
-                # 使用伪古文生成 + Pyserini BM25召回 + embedding重排检索支持句
+                # Use pseudo-ancient Chinese generation + Pyserini BM25 retrieval + embedding reranking to retrieve supporting sentences
                 try:
-                    # 定义索引目录
+                    # Define index directory
                     index_dir = r"/mimer/NOBACKUP/groups/cik_data/yueyan/testfrozen_pipeline/bm25_index_zh"
                     
                     if config["use_pseudo_query"]:
-                        # 使用伪古文生成
+                        # Use pseudo-ancient Chinese generation
                         support_sents = get_supporting_sentences_with_pseudo_bm25(
                             sense_gloss=sense_gloss,
                             target_word=word,
                             index_dir=index_dir,
                             wsid=sense_wsid,
                             bm25_top_k=200,
-                            final_top_k=10,  # 增加数量以获取更多支持句
+                            final_top_k=10,  # Increase number to get more supporting sentences
                             threshold=0.5
                         )
                     else:
-                        # 不使用伪古文生成，直接使用原始义项gloss
+                        # Not using pseudo-ancient Chinese generation, directly use original sense gloss
                         support_sents = get_supporting_sentences_without_pseudo_bm25(
                             sense_gloss=sense_gloss,
                             target_word=word,
                             index_dir=index_dir,
                             wsid=sense_wsid,
                             bm25_top_k=200,
-                            final_top_k=10,  # 增加数量以获取更多支持句
+                            final_top_k=10,  # Increase number to get more supporting sentences
                             threshold=0.5
                         )
-                    print(f"检索到 {len(support_sents)} 条支持句")
+                    print(f"Retrieved {len(support_sents)} supporting sentences")
                     supporting_sentences = support_sents
                     
-                    # 构建prototype向量
+                    # Build prototype vector
                     sent_texts = [s["sentence"] for s in support_sents]
                     sent_embs = [get_embedding(s) for s in sent_texts]
                     
                     if sent_embs:
                         prototype_vector = build_prototype(sent_embs)
                         
-                        # 计算与上下文的相似度
+                        # Calculate similarity with context
                         if config["use_similarity"]:
                             sim = cosine_similarity(context_emb, prototype_vector)
                             similarity = sim
-                            print(f"Prototype与上下文的相似度：{sim:.4f}")
+                            print(f"Prototype similarity with context: {sim:.4f}")
                     
-                    # 生成usage schema
+                    # Generate usage schema
                     if config["use_schema"]:
                         schema = build_usage_schema(sent_texts, target_word=word)
                         schema_summary = schema
-                        print(f"生成的Usage Schema：{schema}")
+                        print(f"Generated Usage Schema: {schema}")
                     
                 except Exception as e:
-                    print(f"处理义项时出错：{e}")
+                    print(f"Error processing sense: {e}")
             else:
-                print("不使用支持句")
+                print("Not using supporting sentences")
             
-            # 构建包含历史证据原文的prototype字典
+            # Build prototype dictionary with historical evidence text
             sense_evidence_list.append({
                 "wsid": sense_wsid,
                 "gloss": sense_gloss,
@@ -350,46 +350,46 @@ def process_batch(batch_id, batch_senses, wsid_to_context, wsid_to_sense, test_w
                 "similarity": similarity
             })
         
-        # 步骤3：最终裁决
-        print("\n>>> 步骤3：最终裁决")
+        # Step 3: Final decision
+        print("\n>>> Step 3: Final decision")
         
         if config["final_decision_with_llm"]:
             try:
-                # 构建证据块
+                # Build evidence block
                 evidence_block = ""
                 for i, evidence in enumerate(sense_evidence_list):
-                    evidence_block += f"\n【候选义项 {i+1}】"
+                    evidence_block += f"\n[Candidate Sense {i+1}]"
                     evidence_block += f"\nwsid: {evidence['wsid']}"
-                    evidence_block += f"\n义项定义: {evidence['gloss']}"
+                    evidence_block += f"\nSense definition: {evidence['gloss']}"
                     if config["use_similarity"]:
-                        evidence_block += f"\n与上下文相似度: {evidence['similarity']:.4f}"
+                        evidence_block += f"\nSimilarity with context: {evidence['similarity']:.4f}"
                     if config["use_schema"]:
                         evidence_block += f"\nUsage Schema: {evidence['schema_summary']}"
                     if config["use_supporting_sentences"] and evidence['supporting_sentences']:
-                        evidence_block += f"\n支持句:"
-                        for j, sent in enumerate(evidence['supporting_sentences'][:2]):  # 只显示前2条支持句
+                        evidence_block += f"\nSupporting sentences:"
+                        for j, sent in enumerate(evidence['supporting_sentences'][:2]):  # Only show first 2 supporting sentences
                             evidence_block += f"\n  {j+1}. {sent['sentence']}"
                     else:
-                        evidence_block += "\n支持句: 无"
+                        evidence_block += "\nSupporting sentences: None"
                     evidence_block += "\n"
                 
-                # 构建最终裁决的提示词
+                # Build final decision prompt
                 final_prompt = f"""
-                你是古汉语词义判断专家。
+                You are an ancient Chinese word sense judgment expert.
                 
-                目标句子：
+                Target sentence:
                 {text}
                 
-                候选义项及历史证据：
+                Candidate senses and historical evidence:
                 {evidence_block}
                 
-                请你：
-                1. 判断每个候选义项是否合理；
-                2. 排除明显不合理的义项；
-                3. 在候选中选出最合适的义项；
-                4. 给出自然语言理由。
+                Please:
+                1. Judge whether each candidate sense is reasonable;
+                2. Exclude obviously unreasonable senses;
+                3. Select the most appropriate sense from the candidates;
+                4. Provide a natural language reason.
                 
-                输出严格JSON：
+                Output strict JSON:
                 {{
                     "prediction": "wsid",
                     "excluded": ["wsid", ...],
@@ -397,111 +397,111 @@ def process_batch(batch_id, batch_senses, wsid_to_context, wsid_to_sense, test_w
                 }}
                 """
                 
-                # 使用缓存调用LLM进行最终裁决
+                # Use cached LLM call for final decision
                 if config.get("use_final_cache", True):
-                    # 改进缓存tag，包含配置信息以避免不同消融实验串缓存
+                    # Improve cache tag, include configuration information to avoid cache collision between different ablation experiments
                     config_signature = "|".join([f"{k}={v}" for k, v in sorted(config.items()) if k != "use_final_cache"])
                     cache_tag = f"final|config={config_signature}|word={word}|context={text[:50]}"
                     response = cached_call_llm(final_prompt, cache_tag=cache_tag)
                 else:
-                    # 不使用缓存，直接调用LLM
-                    print("[最终裁决] 不使用缓存，直接调用LLM")
+                    # Not using cache, directly call LLM
+                    print("[Final Decision] Not using cache, directly calling LLM")
                     response = call_llm(final_prompt)
                 
-                # 移除markdown代码块标记（如果存在）
+                # Remove markdown code block markers (if present)
                 if response.startswith('```json'):
                     response = response[7:]
                 if response.endswith('```'):
                     response = response[:-3]
-                # 移除可能的前后空格和换行符
+                # Remove possible leading/trailing spaces and newlines
                 response = response.strip()
                 
-                # 解析JSON
+                # Parse JSON
                 final_decision = json.loads(response)
                 
-                print(f"最终预测：wsid={final_decision['prediction']}")
-                print(f"排除的义项：{final_decision.get('excluded', [])}")
-                print(f"裁决理由：{final_decision['reason']}")
+                print(f"Final prediction: wsid={final_decision['prediction']}")
+                print(f"Excluded senses: {final_decision.get('excluded', [])}")
+                print(f"Decision reason: {final_decision['reason']}")
                 
-                # 验证预测结果
+                # Verify prediction result
                 is_correct = str(final_decision['prediction']) == gold_wsid
                 if is_correct:
-                    print("✅ 预测正确")
+                    print("✅ Prediction correct")
                     correct += 1
                 else:
-                    print(f"❌ 预测错误，正确答案是：{gold_wsid}")
+                    print(f"❌ Prediction incorrect, correct answer is: {gold_wsid}")
                 
-                # 收集测试结果
+                # Collect test results
                 test_results.append({
-                    '目标词': word,
-                    '上下文': text,
+                    'Target word': word,
+                    'Context': text,
                     'Gold wsid': gold_wsid,
                     'Gold sense': sense['newgloss'],
-                    '预测 wsid': final_decision['prediction'],
-                    '预测结果': '正确' if is_correct else '错误',
-                    '排除的义项': final_decision.get('excluded', []),
-                    '裁决理由': final_decision['reason'],
-                    '候选义项数量': len(candidate_senses),
-                    'LLM生成的Top-2义项数量': len(top2_senses),
-                    'LLM生成的Top-1义项': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
+                    'Predicted wsid': final_decision['prediction'],
+                    'Prediction result': 'Correct' if is_correct else 'Incorrect',
+                    'Excluded senses': final_decision.get('excluded', []),
+                    'Decision reason': final_decision['reason'],
+                    'Number of candidate senses': len(candidate_senses),
+                    'Number of LLM-generated Top-2 senses': len(top2_senses),
+                    'LLM-generated Top-1 sense': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
                 })
                 
             except Exception as e:
-                print(f"最终裁决时出错：{e}")
-                # 收集错误结果
+                print(f"Error in final decision: {e}")
+                # Collect error result
                 test_results.append({
-                    '目标词': word,
-                    '上下文': text,
+                    'Target word': word,
+                    'Context': text,
                     'Gold wsid': gold_wsid,
                     'Gold sense': sense['newgloss'],
-                    '预测 wsid': '错误',
-                    '预测结果': '错误',
-                    '排除的义项': [],
-                    '裁决理由': f'错误：{str(e)}',
-                    '候选义项数量': len(candidate_senses),
-                    'LLM生成的Top-2义项数量': len(top2_senses),
-                    'LLM生成的Top-1义项': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
+                    'Predicted wsid': 'Error',
+                    'Prediction result': 'Incorrect',
+                    'Excluded senses': [],
+                    'Decision reason': f'Error: {str(e)}',
+                    'Number of candidate senses': len(candidate_senses),
+                    'Number of LLM-generated Top-2 senses': len(top2_senses),
+                    'LLM-generated Top-1 sense': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
                 })
                 continue
         else:
-            # 不使用LLM进行最终裁决，使用相似度最高的义项
-            print("不使用LLM进行最终裁决，使用相似度最高的义项")
+            # Not using LLM for final decision, use most similar sense
+            print("Not using LLM for final decision, using most similar sense")
             if sense_evidence_list:
-                # 按相似度排序
+                # Sort by similarity
                 sorted_evidence = sorted(sense_evidence_list, key=lambda x: x['similarity'], reverse=True)
                 best_evidence = sorted_evidence[0]
                 predicted_wsid = best_evidence['wsid']
                 
-                print(f"最终预测：wsid={predicted_wsid}（相似度最高）")
+                print(f"Final prediction: wsid={predicted_wsid} (highest similarity)")
                 
-                # 验证预测结果
+                # Verify prediction result
                 is_correct = str(predicted_wsid) == gold_wsid
                 if is_correct:
-                    print("✅ 预测正确")
+                    print("✅ Prediction correct")
                     correct += 1
                 else:
-                    print(f"❌ 预测错误，正确答案是：{gold_wsid}")
+                    print(f"❌ Prediction incorrect, correct answer is: {gold_wsid}")
                 
-                # 收集测试结果
+                # Collect test results
                 test_results.append({
-                    '目标词': word,
-                    '上下文': text,
+                    'Target word': word,
+                    'Context': text,
                     'Gold wsid': gold_wsid,
                     'Gold sense': sense['newgloss'],
-                    '预测 wsid': predicted_wsid,
-                    '预测结果': '正确' if is_correct else '错误',
-                    '排除的义项': [],
-                    '裁决理由': f'使用相似度最高的义项，相似度: {best_evidence["similarity"]:.4f}',
-                    '候选义项数量': len(candidate_senses),
-                    'LLM生成的Top-2义项数量': len(top2_senses),
-                    'LLM生成的Top-1义项': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
+                    'Predicted wsid': predicted_wsid,
+                    'Prediction result': 'Correct' if is_correct else 'Incorrect',
+                    'Excluded senses': [],
+                    'Decision reason': f'Using most similar sense, similarity: {best_evidence["similarity"]:.4f}',
+                    'Number of candidate senses': len(candidate_senses),
+                    'Number of LLM-generated Top-2 senses': len(top2_senses),
+                    'LLM-generated Top-1 sense': top2_senses[0]['wsid'] if len(top2_senses) > 0 else ''
                 })
             else:
-                print("没有候选义项，跳过该测试")
+                print("No candidate senses, skipping this test")
                 continue
     
-    print(f"\n=== 批次 {batch_id+1} 处理完成 ===")
-    print(f"批次 {batch_id+1} 结果：{correct}/{total} = {correct/total:.3f}")
+    print(f"\n=== Batch {batch_id+1} processing completed ===")
+    print(f"Batch {batch_id+1} result: {correct}/{total} = {correct/total:.3f}")
     
     return correct, total, test_results
 
