@@ -1,0 +1,18 @@
+# 古汉语词义消歧系统依赖
+
+# OpenAI API客户端
+openai
+
+# 数据处理
+numpy
+pandas
+pyyaml
+
+# 深度学习
+torch
+transformers
+
+# Excel导出
+openpyxl
+
+# 其他（collections是Python标准库，无需单独安装）
