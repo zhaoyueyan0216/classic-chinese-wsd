@@ -2,10 +2,13 @@ import json
 import yaml
 import os
 import hashlib
+from pathlib import Path
 from openai import OpenAI
 
+_PROJECT_ROOT = Path(__file__).parent.parent
+
 # 加载配置文件
-with open("config.yaml", "r", encoding="utf-8") as f:
+with open(_PROJECT_ROOT / "config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 # 创建OpenAI客户端
@@ -15,7 +18,7 @@ client = OpenAI(
 )
 
 # 缓存相关设置
-CACHE_DIR = "llm_cache"
+CACHE_DIR = str(_PROJECT_ROOT / "llm_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 def cached_call_llm(prompt: str, cache_tag: str, **kwargs) -> str:
@@ -124,11 +127,4 @@ def call_llm(prompt, model=None, temperature=0.0, seed=42):
             except Exception as e2:
                 print(f"[LLM调用错误] 默认模型也失败: {e2}")
         
-        # 提供一个默认的模拟回答，以便测试可以继续
-        print("[LLM调用] 提供默认模拟回答")
-        return json.dumps({
-            "top_senses": [
-                {"wsid": "492722", "reason": "在当前语境下说得通"},
-                {"wsid": "492723", "reason": "在当前语境下也说得通"}
-            ]
-        })
+        raise RuntimeError(f"LLM调用彻底失败: {e}")

@@ -1,0 +1,32 @@
+# ============================================================================
+# 汉语词义演变 RAG 系统 - 配置文件模板
+# 使用方法: 复制此文件为 config.yaml，填入你的 API Key
+# ============================================================================
+
+api:
+  api_key: "YOUR_API_KEY_HERE"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+models:
+  llm_model: "deepseek-v3.2-exp"
+  embedding_model: "text-embedding-v3"
+  embedding_dim: 1024
+  judge_model: "deepseek-v3.2-exp"
+  reranker_path: "models/cross_encoder_reranker.bin"
+
+rag:
+  working_dir: "./rag_storage"
+  top_k: 5
+  query_mode: "naive"
+
+paths:
+  knowledge_base: "datatest.xlsx"
+  benchmark: "benchmark爱n10.json"
+  output_dir: "./outputs"
+
+advanced:
+  rebuild_index: true
+  enable_image_processing: false
+  enable_table_processing: true
+  enable_equation_processing: false
+  content_mode: "separate"

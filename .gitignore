@@ -1,0 +1,35 @@
+venv/
+__pycache__/
+*.pyc
+*.pkl
+
+# LLM and embedding caches
+llm_cache/
+llm_cache_*/
+embedding_cache.pkl
+guwen_embedding_cache.pkl
+
+# Large files — rebuild/download locally
+bm25_index_zh/
+guwenbert_output/
+retrieval_corpus/
+dataprocess/data/contexts.json
+dataprocess/data/senses.json
+
+# Experiment output files
+ablation_a_data*.xlsx
+ablation_b_data*.xlsx
+ablation_nohistory_data*.xlsx
+ablation_nopseudo_*.xlsx
+ablation_nopseudo_*.csv
+*_detailed_*.xlsx
+*_detailed_*.csv
+*_rounds_*.xlsx
+server_ablation_results_summary_*.json
+purellm_*.xlsx
+
+# Config with secrets — use config.yaml.example as template
+config.yaml
+
+# Temp files
+~$*

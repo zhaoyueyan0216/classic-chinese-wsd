@@ -1,172 +1,126 @@
-# Ancient Chinese Word Sense Disambiguation System
+# Ancient Chinese Word Sense Disambiguation via Multi-Agent RAG
 
-## Project Overview
+Code for the paper: *[your paper title]*.
 
-This project implements a complete pipeline for ancient Chinese word sense disambiguation (WSD) using pseudo-ancient Chinese generation, Pyserini BM25 retrieval, and LLM-based decision making. The system is designed to accurately identify the correct sense of ancient Chinese words in context.
+The pipeline disambiguates Classical Chinese word senses by retrieving historical usage evidence from a large corpus and coordinating multiple LLM agents to reason over that evidence.
 
-## System Architecture
+## How it works
 
-The system consists of the following components:
+Given a target word in context, the pipeline runs in five stages:
 
-1. **Pseudo-Ancient Chinese Generation** - Generates pseudo-ancient Chinese examples for better retrieval
-2. **Pyserini BM25 Retrieval** - Retrieves relevant supporting sentences from a corpus
-3. **Embedding Reranking** - Reranks retrieved sentences based on semantic similarity
-4. **LLM-based Top-k Filtering** - Uses LLM to filter top-k candidate senses
-5. **Historical Evidence Construction** - Builds evidence from retrieved sentences
-6. **Final LLM Decision** - Makes the final sense disambiguation decision
+1. **Top-K filtering** — the LLM votes three times independently; we take the union of selected senses as candidates
+2. **Pseudo query generation** — for each candidate sense, generate pseudo Classical Chinese sentences to use as BM25 queries
+3. **BM25 retrieval + reranking** — retrieve from the corpus, rerank by embedding similarity to the sense gloss
+4. **Sense agent verification** — a per-sense LLM agent filters noisy sentences and assesses contextual fit
+5. **Aggregator decision** — a final LLM weighs all agent outputs under an explicit evidence-bias correction protocol
 
-## Project Structure
+## Requirements
 
-```
-testbm25pipeline/
-├── main.py                # Main test script
-├── pseudo_retrieval.py     # Pseudo-ancient Chinese generation and retrieval
-├── embedding_utils.py      # Embedding utilities
-├── llm.py                 # LLM interaction utilities
-├── prototype.py           # Prototype vector construction
-├── schema.py              # Usage schema construction
-├── decision.py            # Decision utilities
-├── requirements.txt       # Project dependencies
-├── data/                  # Test data
-│   ├── character/         # Character-level data
-│   └── compound/          # Compound word data
-├── guwenbert_output/      # GuwenBERT model output
-└── bm25_index_zh/         # BM25 index directory
-```
-
-## Prerequisites
-
-- Python 3.8+
-- PIP package manager
-- Access to LLM API (e.g., OpenAI, DeepSeek)
-- Pyserini for BM25 retrieval
-- Pre-built BM25 index for ancient Chinese corpus
-
-
-3. Set up environment variables for LLM API access :
+- Python 3.9+
+- Java 11+ (required by Pyserini)
+- GPU recommended for embedding (CPU works but is slow)
 
 ```bash
-# For example, for OpenAI
-export OPENAI_API_KEY=your-api-key
-
-# For DeepSeek
-export DEEPSEEK_API_KEY=your-api-key
+conda create -n wsd python=3.9
+conda activate wsd
+pip install -r requirements.txt
+pip install pyserini
 ```
 
-4. Ensure the BM25 index is available at the specified path in `main.py`:
+Verify Java: `java -version`
 
-```python
-index_dir = r"/mimer/NOBACKUP/groups/cik_data/yueyan/testfrozen_pipeline/bm25_index_zh"
-```
+## Setup
 
-## Usage
-
-### Running the Full System
-
-To run the full system with all components enabled:
+### 1. Config
 
 ```bash
-python main.py
+cp config.yaml.example config.yaml
 ```
 
-### Running Ablation Experiments
+Fill in your API key in `config.yaml`. The default setup uses DeepSeek via DashScope:
 
-The system supports several ablation experiments to evaluate the contribution of different components:
+```yaml
+api:
+  api_key: "YOUR_API_KEY_HERE"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+models:
+  llm_model: "deepseek-v3.2-exp"
+```
+
+Any OpenAI-compatible endpoint works — change `base_url` and `llm_model` accordingly. `config.yaml` is gitignored.
+
+### 2. GuWenBERT
+
+The embedding module uses [GuWenBERT](https://huggingface.co/ethanyt/guwenbert-base). It downloads automatically on first run. On an HPC cluster without internet, download it first then point to the local path:
 
 ```bash
-# No Top-2 filtering
-python main.py ablation_no_top2
-
-# Only Top-2 filtering (no other components)
-python main.py ablation_top2_only
-
-# No historical evidence
-python main.py ablation_no_history
-
-# No pseudo-ancient Chinese generation
-python main.py ablation_no_pseudo
-
-# No usage schema
-python main.py ablation_no_schema
-
-# No similarity calculation
-python main.py ablation_no_similarity
+export GUWENBERT_MODEL_PATH=/path/to/guwenbert-base
 ```
 
-## Configuration Options
+### 3. Build the BM25 index
 
-The system is configured through the `BASE_CONFIG` dictionary in `main.py`:
+The index is built from `retrieval_corpus/` and is not in the repository (14 GB). Build it once:
 
-| Configuration Option | Description | Default Value |
-|---------------------|-------------|---------------|
-| `use_top2_filter` | Use LLM to filter top-2 candidate senses | True |
-| `use_pseudo_query` | Use pseudo-ancient Chinese generation | True |
-| `use_bm25` | Use Pyserini BM25 retrieval | True |
-| `use_rerank` | Use embedding-based reranking | True |
-| `use_schema` | Use usage schema construction | True |
-| `use_similarity` | Use similarity calculation | True |
-| `use_supporting_sentences` | Use supporting sentences | True |
-| `final_decision_with_llm` | Use LLM for final decision | True |
-| `use_final_cache` | Use cache for final LLM decisions | False |
-
-## Output
-
-The system generates detailed test results in Excel or CSV format, including:
-
-- Target word
-- Context sentence
-- Gold sense ID and definition
-- Predicted sense ID
-- Prediction result (Correct/Incorrect)
-- Excluded senses
-- Decision reasoning
-- Number of candidate senses
-- LLM-generated Top-2 senses
-
-## Evaluation Metrics
-
-The system evaluates performance using accuracy, calculated as:
-
-```
-Accuracy = Number of correct predictions / Total number of test cases
+```bash
+python -m pyserini.index.lucene \
+  --collection JsonCollection \
+  --input retrieval_corpus/ \
+  --index bm25_index_zh/ \
+  --generator DefaultLuceneDocumentGenerator \
+  --threads 4 \
+  --language zh
 ```
 
-## Sample Output
+### 4. Smoke test
 
-```
-Ancient Chinese Word Sense Disambiguation System Test - Using Pseudo-Ancient Chinese Generation
-Configuration: full
-==========================================================================================
-Configuration details:
-  use_top2_filter: True
-  use_pseudo_query: True
-  use_bm25: True
-  use_rerank: True
-  use_schema: True
-  use_similarity: True
-  use_supporting_sentences: True
-  final_decision_with_llm: True
-  use_final_cache: False
-==========================================================================================
-Loaded 1000 test contexts
-Using 999 senses for testing
-Actual number of target words to test: 99 (sorted)
-Sorted test words: ['严', '丹', '体', '余', '倕', '偶', '入', '冲', '凉', '劳', ...]
-
->>> Starting batch processing, total 10 batches, 100 test cases per batch
-
-=== Batch 1 completed, cumulative result: 85/100 = 0.850 ===
-=== Batch 2 completed, cumulative result: 172/200 = 0.860 ===
-...
-
->>> Exporting test results to Excel
-✅ Successfully exported test results to pseudo_test_results_full_20260414_123456.xlsx
-Exported 999 test records
-Added statistics row: Number of test cases=999, Number of correct predictions=867, Accuracy=0.868
-
-==========================================================================================
-Test completed: 867/999 = 0.868
-==========================================================================================
+```bash
+python experiments/main_experiment.py --rounds 1 --samples 2
 ```
 
-#
+This runs 2 samples through the full pipeline. If it completes without error, everything is wired up correctly.
+
+## Running experiments
+
+All commands are run from the project root.
+
+**Full pipeline:**
+```bash
+python experiments/main_experiment.py --rounds 20 --seed 42
+```
+
+**Ablation studies** (each reads `dataprocess/data/data1.xlsx` and `data2.xlsx`):
+```bash
+python experiments/ablation_a_experiment.py --target both        # remove LLM verification
+python experiments/ablation_b_experiment.py --target both        # remove aggregator
+python experiments/ablation_nohistory_experiment.py --target both # remove retrieval entirely
+python experiments/ablation_nopseudo_experiment.py --rounds 20   # remove pseudo query generation
+python experiments/naive_rag_experiment.py --target both         # naive RAG baseline
+```
+
+Results are written to timestamped `.xlsx` files in the project root.
+
+## Caching
+
+LLM calls (Top-K and sense agent) are cached to `llm_cache/`. On repeated runs, cached calls are skipped. The aggregator is intentionally not cached — its non-determinism is the source of variance across the 20 rounds used for significance testing.
+
+## Repository structure
+
+```
+core/                   LLM wrapper, embedding encoder, BM25 retrieval
+experiments/            All experiment and ablation scripts
+analysis/               Plotting and result analysis scripts
+data/                   Sense definitions and annotated contexts
+dataprocess/data/       Evaluation test sets (data1.xlsx, data2.xlsx)
+retrieval_corpus/       Classical Chinese corpus (input for BM25 indexing)
+bm25_index_zh/          BM25 index — built locally, not in git
+```
+
+## Troubleshooting
+
+`RuntimeError: LLM调用彻底失败: 401` — API key is wrong or expired.
+
+`FileNotFoundError: bm25_index_zh` — index not built yet, see step 3.
+
+`OSError: Can't load tokenizer for 'ethanyt/guwenbert-base'` — set `GUWENBERT_MODEL_PATH` to a local snapshot.
+
+`ModuleNotFoundError: pyserini` — run `pip install pyserini` and check that Java 11+ is on your PATH.

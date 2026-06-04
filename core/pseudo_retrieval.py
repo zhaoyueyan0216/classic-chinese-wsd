@@ -1,8 +1,8 @@
 # 基于伪古文生成 + Pyserini BM25召回 + embedding重排 的支持句检索功能
 
 import json
-from embedding_utils import get_embedding, cosine_similarity
-from llm import cached_call_llm
+from .embedding_utils import get_embedding, cosine_similarity
+from .llm import cached_call_llm
 from pyserini.search.lucene import LuceneSearcher
 
 # 全局缓存：同一个 index_dir 只初始化一次 searcher
@@ -123,9 +123,10 @@ def generate_pseudo_ancient_chinese(gloss, target_word, wsid=None, num_examples=
 def build_bm25_query_from_pseudo(pseudo_sentences, target_word, gloss):
     """
     用伪古文 + 目标词 + 义项定义构造 BM25 query
+    目标词使用 + 前缀表示必须匹配
     """
     pseudo_part = " ".join([s.strip() for s in pseudo_sentences if s and s.strip()])
-    query = f"{target_word} {gloss} {pseudo_part}".strip()
+    query = f"+{target_word} {gloss} {pseudo_part}".strip()
     return query
 
 
@@ -272,7 +273,8 @@ def retrieve_supporting_sentences_without_pseudo_bm25(
     print(f"[无伪古文BM25检索] 最终返回数: {final_top_k}")
 
     # 直接使用目标词和义项定义作为查询
-    query = f"{target_word} {gloss}".strip()
+    # 目标词使用 + 前缀表示必须匹配
+    query = f"+{target_word} {gloss}".strip()
     print(f"[无伪古文BM25检索] Query: {query[:200]}")
 
     hits = searcher.search(query, k=bm25_top_k)

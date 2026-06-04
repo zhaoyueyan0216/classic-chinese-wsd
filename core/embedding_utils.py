@@ -4,43 +4,30 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 from typing import List
 
-# 设置 Hugging Face 镜像（如果环境变量未设置）
-if not os.environ.get('HF_ENDPOINT'):
-    os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-
-# 固定的模型名称
-DEFAULT_MODEL_NAME = "ethanyt/guwenbert-base"
+# 服务器上的模型本地路径（优先从环境变量读取）
+DEFAULT_MODEL_NAME = os.environ.get(
+    "GUWENBERT_MODEL_PATH",
+    "ethanyt/guwenbert-base"  # set GUWENBERT_MODEL_PATH to a local snapshot on HPC
+)
 
 # 古汉语BERT编码器
 class GuWenBERTEncoder:
     def __init__(self, model_name=DEFAULT_MODEL_NAME, batch_size=64):
-        # 确保使用正确的模型名称格式
-        if os.path.isabs(model_name) or model_name.startswith('./') or model_name.startswith('../'):
-            print(f"   ⚠️ 检测到本地路径，使用默认模型: {DEFAULT_MODEL_NAME}")
-            model_name = DEFAULT_MODEL_NAME
-        
-        try:
-            # 首先尝试从本地加载
-            print(f"   📂 尝试从本地加载模型...")
-            print(f"   🔍 模型名称: {model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-            self.model = AutoModel.from_pretrained(model_name, local_files_only=True)
-            print(f"   ✅ 成功从本地加载模型")
-        except Exception as e:
-            print(f"   ⚠️ 本地模型未找到，尝试从镜像下载...")
-            print(f"   🌐 使用镜像: {os.environ.get('HF_ENDPOINT', 'https://hf-mirror.com')}")
-            try:
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=False)
-                self.model = AutoModel.from_pretrained(model_name, local_files_only=False)
-                print(f"   ✅ 成功从镜像下载模型")
-            except Exception as e2:
-                print(f"   ❌ 无法加载模型: {e2}")
-                print(f"   💡 请手动下载模型并放到缓存目录")
-                print(f"   📁 缓存目录: ~/.cache/huggingface/hub/")
-                print(f"   🔗 模型地址: https://hf-mirror.com/ethanyt/guwenbert-base")
-                raise e2
-        
-        # 将模型移到可用的设备上（GPU或CPU）
+        print(f"   📂 从本地snapshot加载模型...")
+        print(f"   🔍 模型路径: {model_name}")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            local_files_only=True
+        )
+        self.model = AutoModel.from_pretrained(
+            model_name,
+            local_files_only=True,
+            use_safetensors=False,  # 强制使用 .bin 文件，避免 safetensors/bin 检查
+            dtype=torch.float16,  # 使用 fp16 减少显存占用
+        )
+        print(f"   ✅ 本地模型加载成功")
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"   🧠 使用设备: {self.device}")
         print(f"   📦 批处理大小: {batch_size}")
@@ -49,7 +36,6 @@ class GuWenBERTEncoder:
             print(f"   📊 GPU内存: {torch.cuda.memory_allocated()/1024/1024:.2f} MB 已分配")
         self.model.to(self.device)
         self.model.eval()
-        # 设置批处理大小
         self.batch_size = batch_size
 
     @torch.no_grad()
@@ -88,6 +74,7 @@ class GuWenBERTEncoder:
 # 初始化全局编码器实例
 guwen_encoder = None
 
+
 def get_encoder():
     """延迟初始化编码器"""
     global guwen_encoder
@@ -96,6 +83,7 @@ def get_encoder():
         guwen_encoder = GuWenBERTEncoder()
         print("✅ 古汉语BERT编码器初始化完成！")
     return guwen_encoder
+
 
 def get_embedding(text, max_length=128):
     """
@@ -122,39 +110,63 @@ def get_embedding(text, max_length=128):
         # 返回全零向量作为fallback
         return np.zeros(768)
 
+
 def cosine_similarity(vec1, vec2):
     """
     计算两个向量的余弦相似度
-    
+
     Args:
         vec1 (np.ndarray): 第一个向量
         vec2 (np.ndarray): 第二个向量
-        
+
     Returns:
         float: 余弦相似度值
     """
     if vec1 is None or vec2 is None:
         return 0.0
-    
-    # 确保向量是一维的
+
     vec1 = np.array(vec1).flatten()
     vec2 = np.array(vec2).flatten()
-    
-    # 计算点积
+
     dot_product = np.dot(vec1, vec2)
-    
-    # 计算向量的范数
     norm1 = np.linalg.norm(vec1)
     norm2 = np.linalg.norm(vec2)
-    
-    # 防止除以零
+
     if norm1 == 0 or norm2 == 0:
         return 0.0
-    
-    # 计算余弦相似度
+
     similarity = dot_product / (norm1 * norm2)
-    
-    # 确保返回标量值 - 使用.item()获取numpy标量的Python内置类型，然后转换为float
+
     if hasattr(similarity, 'item'):
         return float(similarity.item())
     return float(similarity)
+
+
+def get_embeddings(texts, batch_size=128):
+    """
+    批量获取文本嵌入，真正提高GPU利用率
+
+    Args:
+        texts (list): 输入文本列表
+        batch_size (int): 批处理大小，默认128，如果爆显存可改为64
+
+    Returns:
+        np.ndarray: 文本的嵌入向量矩阵 (len(texts), 768)
+    """
+    if not texts:
+        return np.zeros((0, 768))
+
+    try:
+        encoder = get_encoder()
+        encoder.batch_size = batch_size
+
+        embeddings = encoder.encode(texts)
+
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        embeddings = embeddings / norms
+
+        return embeddings
+    except Exception as e:
+        print(f"[Embedding批量计算] 出错: {e}")
+        return np.zeros((len(texts), 768))
