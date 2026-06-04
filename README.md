@@ -1,7 +1,5 @@
 # Ancient Chinese Word Sense Disambiguation via Multi-Agent RAG
 
-Code for the paper: *[your paper title]*.
-
 The pipeline disambiguates Classical Chinese word senses by retrieving historical usage evidence from a large corpus and coordinating multiple LLM agents to reason over that evidence.
 
 ## How it works
