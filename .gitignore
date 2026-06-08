@@ -13,8 +13,7 @@ guwen_embedding_cache.pkl
 bm25_index_zh/
 guwenbert_output/
 retrieval_corpus/
-dataprocess/data/contexts.json
-dataprocess/data/senses.json
+dataprocess/
 
 # Experiment output files
 ablation_a_data*.xlsx
