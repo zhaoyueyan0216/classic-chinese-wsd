@@ -32,3 +32,12 @@ config.yaml
 
 # Temp files
 ~$*
+
+# ACP-RAG baseline: regenerate locally via build scripts / pipeline steps
+acprag_baseline/data/acp_qa.json
+acprag_baseline/data/test_dataset.json
+acprag_baseline/data/test_keywords.json
+acprag_baseline/data/rank_pairs.jsonl
+acprag_baseline/index/
+acprag_baseline/results/
+acprag_baseline/Model_Training/rank_model/
